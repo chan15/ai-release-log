@@ -1,5 +1,6 @@
 import pytest
 
+import main as main_module
 from main import (load_last_versions, save_last_versions, format_release_message, send_to_discord)
 from scrapers import ScraperFactory, BaseScraper
 
@@ -103,6 +104,16 @@ def test_send_to_discord_success(mocker):
     assert mock_post.called
 
 
+def test_send_to_discord_requires_webhook(mocker):
+    """Test that missing webhook URLs fail fast without an HTTP call."""
+    mock_post = mocker.patch("requests.post")
+
+    result = send_to_discord("Hello Discord", webhook_url=None)
+
+    assert result is False
+    mock_post.assert_not_called()
+
+
 def test_send_to_discord_long_message(mocker):
     """Test that long messages are split."""
     mock_post = mocker.patch("requests.post")
@@ -111,6 +122,29 @@ def test_send_to_discord_long_message(mocker):
     send_to_discord(long_msg)
     # Should be split into at least 2 messages
     assert mock_post.call_count >= 2
+
+
+def test_main_does_not_mark_version_processed_when_discord_fails(mocker):
+    """Test that failed notifications do not advance stored versions."""
+    mocker.patch("main.DISCORD_WEBHOOK_URL", "https://example.com/webhook")
+    mocker.patch("main.GEMINI_API_KEY", None)
+    mocker.patch("main.load_last_versions", return_value={"gemini": None})
+    mocker.patch("main.save_last_versions")
+    mocker.patch("main.send_to_discord", return_value=False)
+    mocker.patch.object(ScraperFactory, "get_all_keys", return_value=["gemini"])
+
+    scraper = mocker.Mock()
+    scraper.name = "Gemini CLI"
+    scraper.fetch_latest_release.return_value = {
+        "version": "v1.0.0",
+        "url": "https://example.com/release",
+        "date": "2024-01-01",
+        "description": "Notes",
+    }
+    mocker.patch.object(ScraperFactory, "get_scraper", return_value=scraper)
+
+    main_module.main()
+    main_module.save_last_versions.assert_not_called()
 
 
 def test_fetch_gemini_style(mocker):
@@ -133,6 +167,54 @@ def test_fetch_gemini_style(mocker):
     scraper = ScraperFactory.get_scraper("gemini")
     release = scraper.fetch_latest_release()
     assert release["version"] == "v0.31.0"
+
+
+def test_fetch_latest_release_ignores_non_prerelease_warning_badge(mocker):
+    """Test that warning badges without 'Pre-release' do not skip a release."""
+    mock_html = """
+    <div class="Box-body">
+        <span class="Label--warning">Latest</span>
+        <a class="Link--primary" href="/owner/repo/releases/tag/v1.2.0">v1.2.0</a>
+        <div class="markdown-body"><p>Stable release</p></div>
+    </div>
+    """
+
+    mock_resp = mocker.Mock()
+    mock_resp.content = mock_html.encode('utf-8')
+    mock_resp.raise_for_status = mocker.Mock()
+    mocker.patch("requests.get", return_value=mock_resp)
+
+    scraper = BaseScraper("Test Project", "http://fake.url")
+    release = scraper.fetch_latest_release()
+
+    assert release["version"] == "v1.2.0"
+
+
+def test_fetch_latest_release_nested_lists_not_duplicated(mocker):
+    """Test that nested list items are included once."""
+    mock_html = """
+    <div class="Box-body">
+        <a class="Link--primary" href="/owner/repo/releases/tag/v1.1.0">v1.1.0</a>
+        <div class="markdown-body">
+            <ul>
+                <li>Parent item
+                    <ul><li>Nested item</li></ul>
+                </li>
+            </ul>
+        </div>
+    </div>
+    """
+
+    mock_resp = mocker.Mock()
+    mock_resp.content = mock_html.encode('utf-8')
+    mock_resp.raise_for_status = mocker.Mock()
+    mocker.patch("requests.get", return_value=mock_resp)
+
+    scraper = BaseScraper("Test Project", "http://fake.url")
+    release = scraper.fetch_latest_release()
+
+    assert release["description"].count("- Parent item") == 1
+    assert release["description"].count("  - Nested item") == 1
 
 
 def test_fetch_copilot_style(mocker):

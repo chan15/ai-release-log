@@ -43,7 +43,7 @@ def load_last_versions() -> Dict[str, Optional[str]]:
     return {key: None for key in project_keys}
 
 
-def save_last_versions(versions: Dict[str, Optional[str]]):
+def save_last_versions(versions: Dict[str, Optional[str]]) -> None:
     """
     Save the last processed versions to file.
 
@@ -88,7 +88,7 @@ Return ONLY the translated content without any extra explanation or preamble."""
         return text  # Return original text if translation fails
 
 
-def send_to_discord(content: str, webhook_url: str = DISCORD_WEBHOOK_URL):
+def send_to_discord(content: str, webhook_url: Optional[str] = DISCORD_WEBHOOK_URL) -> bool:
     """
     Send message to Discord via webhook.
 
@@ -96,6 +96,10 @@ def send_to_discord(content: str, webhook_url: str = DISCORD_WEBHOOK_URL):
         content: Message content to send
         webhook_url: Discord webhook URL
     """
+    if not webhook_url:
+        print("   ⚠️  Discord webhook URL is not configured")
+        return False
+
     print(f"\n📤 Sending to Discord...")
 
     try:
@@ -212,9 +216,6 @@ def main():
         print(f"   🆕 New release detected!")
         print(f"      Last processed: {last_version or 'None'}")
         print(f"      Current: {current_version}")
-        has_updates = True
-        new_versions[project_key] = current_version
-
         # Translate the release
         print(f"\n🌐 Translating {project_name} release...")
         translated_release = latest_release.copy()
@@ -225,12 +226,20 @@ def main():
         message = format_release_message(project_name, translated_release, translated=bool(api_key))
 
         # Send to Discord
+        notification_sent = True
         if DISCORD_WEBHOOK_URL:
             print(f"\n📤 Sending {project_name} update to Discord...")
-            send_to_discord(message)
+            notification_sent = send_to_discord(message)
         else:
             print(f"\n⚠️  DISCORD_WEBHOOK_URL not set, skipping Discord notification.")
             print(f"Formatted message (first 100 chars): {message[:100]}...")
+
+        if notification_sent:
+            has_updates = True
+            new_versions[project_key] = current_version
+        else:
+            print(f"   ⚠️  Notification failed, keeping last processed version at {last_version or 'None'}")
+            new_versions[project_key] = last_version
 
     # Save the new versions
     if has_updates:
