@@ -1,7 +1,7 @@
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 
 class BaseScraper:
@@ -12,6 +12,92 @@ class BaseScraper:
     def __init__(self, name: str, url: str):
         self.name = name
         self.url = url
+
+    def _is_pre_release(self, section: Tag) -> bool:
+        """Return True when GitHub explicitly labels a release as pre-release."""
+        for badge in section.find_all('span', class_='Label--warning'):
+            badge_text = badge.get_text(" ", strip=True).lower()
+            if "pre-release" in badge_text:
+                return True
+        return False
+
+    def _build_release_url(self, version_elem: Optional[Tag]) -> str:
+        """Normalize a release link into a fully-qualified GitHub URL."""
+        if not version_elem or not version_elem.get('href'):
+            return ""
+
+        href = version_elem.get('href')
+        if href.startswith('/'):
+            return f"https://github.com{href}"
+        return href
+
+    def _extract_list_item_text(self, item: Tag) -> str:
+        """Extract only the direct text for a list item, excluding nested lists."""
+        parts = []
+        for child in item.contents:
+            if isinstance(child, NavigableString):
+                text = str(child).strip()
+            elif getattr(child, 'name', None) in ['ul', 'ol']:
+                continue
+            else:
+                text = child.get_text(" ", strip=True)
+
+            if text:
+                parts.append(text)
+
+        return ' '.join(parts)
+
+    def _append_list_items(self, lines: list[str], list_elem: Tag, indent: int = 0) -> None:
+        """Flatten nested HTML lists into indented Markdown bullet points."""
+        prefix = " " * indent
+        for li in list_elem.find_all('li', recursive=False):
+            item_text = self._extract_list_item_text(li)
+            if item_text:
+                lines.append(f"{prefix}- {item_text}")
+
+            for nested_list in li.find_all(['ul', 'ol'], recursive=False):
+                self._append_list_items(lines, nested_list, indent=indent + 2)
+
+    def _extract_description(self, desc_elem: Optional[Tag]) -> str:
+        """Convert GitHub release HTML into Discord-friendly Markdown."""
+        if not desc_elem:
+            return ""
+
+        for code in desc_elem.find_all('code'):
+            code_text = code.get_text()
+            code.replace_with(f'`{code_text}`')
+
+        lines = []
+        skip_section = False
+        for elem in desc_elem.find_all(recursive=False):
+            if not isinstance(elem, Tag):
+                continue
+
+            if elem.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                header_text = elem.get_text(" ", strip=True)
+                if "changelog" in header_text.lower():
+                    skip_section = True
+                    continue
+
+                skip_section = False
+                level = min(int(elem.name[1]), 4)
+                lines.append(f"\n{'#' * level} {header_text}")
+                continue
+
+            if skip_section:
+                continue
+
+            if elem.name == 'p':
+                text = elem.get_text(" ", strip=True)
+                if text:
+                    lines.append(text)
+            elif elem.name in ['ul', 'ol']:
+                self._append_list_items(lines, elem)
+
+        if lines:
+            return '\n'.join(lines).strip()
+
+        return ' '.join(desc_elem.get_text(" ", strip=True).split())
 
     def fetch_latest_release(self) -> Optional[Dict]:
         """
@@ -35,9 +121,7 @@ class BaseScraper:
             # Find the first non-pre-release
             for section in release_sections:
                 # Check if it's a pre-release - look for Label--warning with "Pre-release" text
-                pre_release_badge = section.find('span', class_='Label--warning')
-
-                if pre_release_badge:
+                if self._is_pre_release(section):
                     # Extract version for logging
                     version_link = section.find('a', class_='Link--primary')
                     version_text = version_link.get_text(strip=True) if version_link else "Unknown"
@@ -53,14 +137,7 @@ class BaseScraper:
                 version = version_elem.get_text(strip=True) if version_elem else "Unknown"
 
                 # Extract release URL
-                release_url = ""
-                if version_elem and version_elem.get('href'):
-                    href = version_elem.get('href')
-                    # Make it a full URL if it's a relative path
-                    if href.startswith('/'):
-                        release_url = f"https://github.com{href}"
-                    else:
-                        release_url = href
+                release_url = self._build_release_url(version_elem)
 
                 # Extract date from relative-time element
                 date_elem = section.find('relative-time')
@@ -68,61 +145,7 @@ class BaseScraper:
 
                 # Extract description from markdown-body, preserving formatting and structure
                 desc_elem = section.find('div', class_='markdown-body')
-                description = ""
-                if desc_elem:
-                    # Replace code tags with backticks to preserve inline code
-                    for code in desc_elem.find_all('code'):
-                        code_text = code.get_text()
-                        code.replace_with(f'`{code_text}`')
-
-                    # Process elements in order to preserve structure
-                    lines = []
-                    skip_section = False
-                    for elem in desc_elem.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol']):
-                        if elem.name.startswith('h'):
-                            header_text = elem.get_text(strip=True)
-                            # Skip Changelog sections
-                            if "changelog" in header_text.lower():
-                                skip_section = True
-                                continue
-                            else:
-                                skip_section = False
-
-                            # Convert headers to markdown format (using at most 4 # for Discord visibility)
-                            level = min(int(elem.name[1]), 4)
-                            lines.append(f"\n{'#' * level} {header_text}")
-
-                        if skip_section:
-                            continue
-
-                        if elem.name == 'p':
-                            text = elem.get_text(strip=True)
-                            if text:
-                                lines.append(text)
-                        elif elem.name in ['ul', 'ol']:
-                            for li in elem.find_all('li', recursive=False):
-                                # Remove nested list text from parent LI to avoid duplication
-                                li_text = ""
-                                for child in li.children:
-                                    if child.name not in ['ul', 'ol']:
-                                        li_text += child.get_text(strip=True)
-
-                                if li_text:
-                                    lines.append(f"- {li_text}")
-
-                                # Handle nested lists if any
-                                nested_list = li.find(['ul', 'ol'], recursive=False)
-                                if nested_list:
-                                    for n_li in nested_list.find_all('li', recursive=False):
-                                        n_text = n_li.get_text(strip=True)
-                                        if n_text:
-                                            lines.append(f"  - {n_text}")
-
-                    if lines:
-                        description = '\n'.join(lines).strip()
-                    else:
-                        # Fallback
-                        description = ' '.join(desc_elem.get_text().split())
+                description = self._extract_description(desc_elem)
 
                 release_info = {'version': version, 'url': release_url, 'date': date, 'description': description}
 
