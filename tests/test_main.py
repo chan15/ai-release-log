@@ -1,7 +1,7 @@
 import pytest
 
-from main import (load_last_versions, save_last_versions, format_release_message, fetch_latest_release, send_to_discord,
-                  REPOS)
+from main import (load_last_versions, save_last_versions, format_release_message, send_to_discord)
+from scrapers import ScraperFactory, BaseScraper
 
 
 @pytest.fixture
@@ -16,12 +16,13 @@ def test_load_last_versions_empty(temp_version_file):
     """Test loading versions when file doesn't exist."""
     versions = load_last_versions()
     assert all(v is None for v in versions.values())
-    assert set(versions.keys()) == set(REPOS.keys())
+    assert set(versions.keys()) == set(ScraperFactory.get_all_keys())
 
 
 def test_save_and_load_versions(temp_version_file):
     """Test saving and then loading versions."""
-    test_data = {"gemini": "v1.0.0", "copilot": "v2.0.0", "codex": "v3.0.0"}
+    project_keys = ScraperFactory.get_all_keys()
+    test_data = {key: f"v{i}.0.0" for i, key in enumerate(project_keys)}
     save_last_versions(test_data)
 
     loaded = load_last_versions()
@@ -41,7 +42,7 @@ def test_format_release_message():
 
 
 def test_fetch_latest_release_parsing(mocker):
-    """Test parsing logic of fetch_latest_release with mocked HTML."""
+    """Test parsing logic of BaseScraper with mocked HTML."""
     mock_html = """
     <div class="Box-body">
         <a class="Link--primary" href="/owner/repo/releases/tag/v1.1.0">v1.1.0</a>
@@ -60,7 +61,8 @@ def test_fetch_latest_release_parsing(mocker):
     mock_resp.raise_for_status = mocker.Mock()
     mocker.patch("requests.get", return_value=mock_resp)
 
-    release = fetch_latest_release("http://fake.url", "Test Project")
+    scraper = BaseScraper("Test Project", "http://fake.url")
+    release = scraper.fetch_latest_release()
 
     assert release["version"] == "v1.1.0"
     assert "### New Features" in release["description"]
@@ -86,7 +88,8 @@ def test_fetch_latest_release_skips_pre_release(mocker):
     mock_resp.content = mock_html.encode('utf-8')
     mocker.patch("requests.get", return_value=mock_resp)
 
-    release = fetch_latest_release("http://fake.url", "Test Project")
+    scraper = BaseScraper("Test Project", "http://fake.url")
+    release = scraper.fetch_latest_release()
     assert release["version"] == "v1.0.0"
 
 
@@ -127,7 +130,8 @@ def test_fetch_gemini_style(mocker):
     </div>
     """
     mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
-    release = fetch_latest_release("http://gemini.url", "Gemini")
+    scraper = ScraperFactory.get_scraper("gemini")
+    release = scraper.fetch_latest_release()
     assert release["version"] == "v0.31.0"
 
 
@@ -140,7 +144,8 @@ def test_fetch_copilot_style(mocker):
     </div>
     """
     mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
-    release = fetch_latest_release("http://copilot.url", "Copilot")
+    scraper = ScraperFactory.get_scraper("copilot")
+    release = scraper.fetch_latest_release()
     assert release["version"] == "0.0.420"
 
 
@@ -163,7 +168,8 @@ def test_fetch_codex_style(mocker):
     </div>
     """
     mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
-    release = fetch_latest_release("http://codex.url", "Codex")
+    scraper = ScraperFactory.get_scraper("codex")
+    release = scraper.fetch_latest_release()
 
     desc = release["description"]
     assert "## New Features" in desc
