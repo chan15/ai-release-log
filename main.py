@@ -88,7 +88,7 @@ Return ONLY the translated content without any extra explanation or preamble."""
         return text  # Return original text if translation fails
 
 
-def send_to_discord(content: str, webhook_url: Optional[str] = DISCORD_WEBHOOK_URL) -> bool:
+def send_to_discord(content: str, webhook_url: Optional[str] = None) -> bool:
     """
     Send message to Discord via webhook.
 
@@ -96,6 +96,9 @@ def send_to_discord(content: str, webhook_url: Optional[str] = DISCORD_WEBHOOK_U
         content: Message content to send
         webhook_url: Discord webhook URL
     """
+    if webhook_url is None:
+        webhook_url = DISCORD_WEBHOOK_URL
+
     if not webhook_url:
         print("   ⚠️  Discord webhook URL is not configured")
         return False

@@ -96,6 +96,7 @@ def test_fetch_latest_release_skips_pre_release(mocker):
 
 def test_send_to_discord_success(mocker):
     """Test successful Discord notification."""
+    mocker.patch("main.DISCORD_WEBHOOK_URL", "https://example.com/webhook")
     mock_post = mocker.patch("requests.post")
     mock_post.return_value.raise_for_status = mocker.Mock()
 
@@ -106,6 +107,7 @@ def test_send_to_discord_success(mocker):
 
 def test_send_to_discord_requires_webhook(mocker):
     """Test that missing webhook URLs fail fast without an HTTP call."""
+    mocker.patch("main.DISCORD_WEBHOOK_URL", None)
     mock_post = mocker.patch("requests.post")
 
     result = send_to_discord("Hello Discord", webhook_url=None)
@@ -116,6 +118,7 @@ def test_send_to_discord_requires_webhook(mocker):
 
 def test_send_to_discord_long_message(mocker):
     """Test that long messages are split."""
+    mocker.patch("main.DISCORD_WEBHOOK_URL", "https://example.com/webhook")
     mock_post = mocker.patch("requests.post")
     long_msg = "A" * 2500
 
