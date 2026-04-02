@@ -1,6 +1,7 @@
 from typing import Optional
 
 from .base import BaseScraper
+from .claude import ClaudeScraper
 from .codex import CodexScraper
 from .copilot import CopilotScraper
 from .gemini import GeminiScraper
@@ -19,7 +20,8 @@ class ScraperFactory:
         scrapers = {
             "gemini": GeminiScraper,
             "copilot": CopilotScraper,
-            "codex": CodexScraper
+            "codex": CodexScraper,
+            "claude": ClaudeScraper
         }
 
         scraper_class = scrapers.get(project_key.lower())
@@ -29,4 +31,4 @@ class ScraperFactory:
 
     @staticmethod
     def get_all_keys():
-        return ["gemini", "copilot", "codex"]
+        return ["gemini", "copilot", "codex", "claude"]
