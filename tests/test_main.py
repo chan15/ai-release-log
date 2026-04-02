@@ -310,6 +310,20 @@ def test_fetch_latest_release_nested_lists_not_duplicated(mocker):
     assert release["description"].count("  - Nested item") == 1
 
 
+def test_fetch_claude_style(mocker):
+    """Test Claude Code style release parsing."""
+    mock_html = """
+    <div class="Box-body">
+        <a class="Link--primary" href="/anthropics/claude-code/releases/tag/v1.2.0">v1.2.0</a>
+        <div class="markdown-body"><p>Claude Code update</p></div>
+    </div>
+    """
+    mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
+    scraper = ScraperFactory.get_scraper("claude")
+    release = scraper.fetch_latest_release()
+    assert release["version"] == "v1.2.0"
+
+
 def test_fetch_copilot_style(mocker):
     """Test Copilot style with simple numerical versions."""
     mock_html = """
