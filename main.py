@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -23,6 +24,45 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Target language for translation
 TARGET_LANGUAGE = os.getenv("TRANSLATE_LANGUAGE", "Traditional Chinese")
+
+
+def resolve_target_project_keys(vendor_args: list[str]) -> list[str]:
+    """Resolve and validate target project keys from CLI vendor arguments."""
+    available_keys = ScraperFactory.get_all_keys()
+
+    # Show usage when the user explicitly asks for help.
+    if any(arg in ("-h", "--help") for arg in vendor_args):
+        print(f"Usage: main.py [vendor ...]\n   Supported vendors: {', '.join(available_keys)}")
+        raise SystemExit(0)
+
+    # No vendor args means process all supported scrapers.
+    if not vendor_args:
+        return available_keys
+
+    available_lookup = {key.lower(): key for key in available_keys}
+    selected_keys = []
+    seen = set()
+    invalid_vendors = []
+
+    for vendor in vendor_args:
+        normalized_vendor = vendor.lower()
+        canonical_key = available_lookup.get(normalized_vendor)
+        if not canonical_key:
+            invalid_vendors.append(vendor)
+            continue
+
+        # Silently deduplicate repeated vendors.
+        if canonical_key in seen:
+            continue
+        seen.add(canonical_key)
+        selected_keys.append(canonical_key)
+
+    if invalid_vendors:
+        print(f"❌ Unsupported vendor(s): {', '.join(invalid_vendors)}")
+        print(f"   Supported vendors: {', '.join(available_keys)}")
+        raise SystemExit(1)
+
+    return selected_keys
 
 
 def load_last_versions() -> Dict[str, Optional[str]]:
@@ -166,12 +206,20 @@ def format_release_message(project_name: str, release: Dict, translated: bool = 
     return message
 
 
-def main():
+def main(vendor_args: Optional[list[str]] = None):
     """Main function to orchestrate the release scraping, translation, and Discord notification."""
+
+    if vendor_args is None:
+        vendor_args = []
+
+    target_project_keys = resolve_target_project_keys(vendor_args)
 
     print("=" * 60)
     print("GitHub Release Scraper with Gemini Translation (Factory Pattern)")
     print("=" * 60)
+
+    if vendor_args:
+        print(f"\n🎯 Target vendors: {', '.join(target_project_keys)}")
 
     # Load last processed versions
     print("\n📋 Loading last processed versions...")
@@ -182,11 +230,11 @@ def main():
     api_key = GEMINI_API_KEY
 
     # Track new versions
-    new_versions = {}
+    new_versions = last_versions.copy()
     has_updates = False
 
-    # Process each project key
-    for project_key in ScraperFactory.get_all_keys():
+    # Process each selected project key
+    for project_key in target_project_keys:
         # Get scraper from factory
         scraper = ScraperFactory.get_scraper(project_key)
         if not scraper:
@@ -203,7 +251,7 @@ def main():
 
         if not latest_release:
             print(f"   ⚠️  No release found for {project_name}")
-            new_versions[project_key] = last_versions.get(project_key)
+            # new_versions already holds last_versions values from .copy(); no update needed.
             continue
 
         current_version = latest_release['version']
@@ -234,6 +282,8 @@ def main():
             print(f"\n📤 Sending {project_name} update to Discord...")
             notification_sent = send_to_discord(message)
         else:
+            # No webhook configured: treat as "sent" so the version is still saved.
+            # If a webhook is added later, this release will NOT be re-sent.
             print(f"\n⚠️  DISCORD_WEBHOOK_URL not set, skipping Discord notification.")
             print(f"Formatted message (first 100 chars): {message[:100]}...")
 
@@ -259,5 +309,5 @@ def main():
     print("=" * 60)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":  # pragma: no cover
+    main(sys.argv[1:])

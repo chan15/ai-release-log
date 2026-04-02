@@ -22,3 +22,4 @@ last_versions.json
 # Tool-specific files
 .python-version
 .DS_Store
+/.coverage

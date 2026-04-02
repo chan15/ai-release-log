@@ -70,7 +70,7 @@ class BaseScraper:
         lines = []
         skip_section = False
         for elem in desc_elem.find_all(recursive=False):
-            if not isinstance(elem, Tag):
+            if not isinstance(elem, Tag):  # pragma: no cover
                 continue
 
             if elem.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
