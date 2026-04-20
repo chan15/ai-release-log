@@ -404,6 +404,20 @@ def test_translate_with_gemini_success(mocker):
     mock_client.models.generate_content.assert_called_once()
 
 
+def test_translate_with_gemini_empty_response_falls_back_to_original(mocker):
+    """Test that empty Gemini text falls back to the original content."""
+    mock_response = mocker.MagicMock()
+    mock_response.text = None
+    mock_response.candidates = []
+    mock_client = mocker.MagicMock()
+    mock_client.models.generate_content.return_value = mock_response
+    mocker.patch("main.genai.Client", return_value=mock_client)
+
+    result = translate_with_gemini("Hello world", "fake-key")
+
+    assert result == "Hello world"
+
+
 def test_translate_with_gemini_error(mocker):
     """Test that original text is returned when the API raises an error."""
     mocker.patch("main.genai.Client", side_effect=Exception("API error"))
@@ -411,6 +425,39 @@ def test_translate_with_gemini_error(mocker):
     result = translate_with_gemini("Hello world", "fake-key")
 
     assert result == "Hello world"
+
+
+def test_translate_with_gemini_retries_on_429_then_succeeds(mocker):
+    """Test that retryable Gemini errors are retried before succeeding."""
+    mock_response = mocker.MagicMock()
+    mock_response.text = "翻譯後的文字"
+    mock_client = mocker.MagicMock()
+    mock_client.models.generate_content.side_effect = [
+        Exception("429 RESOURCE_EXHAUSTED"),
+        mock_response,
+    ]
+    mocker.patch("main.genai.Client", return_value=mock_client)
+    mock_sleep = mocker.patch("main.time.sleep")
+
+    result = translate_with_gemini("Hello world", "fake-key")
+
+    assert result == "翻譯後的文字"
+    assert mock_client.models.generate_content.call_count == 2
+    mock_sleep.assert_called_once_with(1.0)
+
+
+def test_translate_with_gemini_does_not_retry_non_retryable_error(mocker):
+    """Test that non-retryable Gemini errors fall back immediately."""
+    mock_client = mocker.MagicMock()
+    mock_client.models.generate_content.side_effect = Exception("400 INVALID_ARGUMENT")
+    mocker.patch("main.genai.Client", return_value=mock_client)
+    mock_sleep = mocker.patch("main.time.sleep")
+
+    result = translate_with_gemini("Hello world", "fake-key")
+
+    assert result == "Hello world"
+    assert mock_client.models.generate_content.call_count == 1
+    mock_sleep.assert_not_called()
 
 
 # ── load_last_versions ────────────────────────────────────────────────────────
@@ -518,6 +565,32 @@ def test_main_translates_when_api_key_set(mocker):
     main_module.main()
 
     mock_translate.assert_called_once_with("Original notes", "fake-key")
+
+
+def test_main_does_not_mark_message_as_translated_when_translation_falls_back(mocker):
+    """Test that the translated flag stays false when Gemini returns the original text."""
+    mocker.patch.object(ScraperFactory, "get_all_keys", return_value=["gemini"])
+    mocker.patch("main.GEMINI_API_KEY", "fake-key")
+    mocker.patch("main.DISCORD_WEBHOOK_URL", None)
+    mocker.patch("main.load_last_versions", return_value={"gemini": None})
+    mocker.patch("main.save_last_versions")
+    mocker.patch("main.translate_with_gemini", return_value="Original notes")
+    mock_format = mocker.patch("main.format_release_message", return_value="formatted")
+
+    scraper = mocker.Mock()
+    scraper.name = "Gemini CLI"
+    scraper.fetch_latest_release.return_value = {
+        "version": "v2.0.0",
+        "url": "https://example.com",
+        "date": "2024-01-01",
+        "description": "Original notes",
+    }
+    mocker.patch.object(ScraperFactory, "get_scraper", return_value=scraper)
+
+    main_module.main()
+
+    _, kwargs = mock_format.call_args
+    assert kwargs["translated"] is False
 
 
 # ── ScraperFactory ────────────────────────────────────────────────────────────
@@ -654,4 +727,3 @@ def test_fetch_latest_release_network_exception(mocker):
     release = BaseScraper("Test", "http://test.url").fetch_latest_release()
 
     assert release is None
-

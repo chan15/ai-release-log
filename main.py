@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -24,6 +25,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Target language for translation
 TARGET_LANGUAGE = os.getenv("TRANSLATE_LANGUAGE", "Traditional Chinese")
+TRANSLATION_MODEL = os.getenv("GEMINI_TRANSLATION_MODEL", "gemini-2.5-flash")
+TRANSLATION_MAX_RETRIES = 3
+TRANSLATION_RETRY_DELAY_SECONDS = 1.0
 
 
 def resolve_target_project_keys(vendor_args: list[str]) -> list[str]:
@@ -111,21 +115,50 @@ def translate_with_gemini(text: str, api_key: str) -> str:
     """
     try:
         client = genai.Client(api_key=api_key)
+    except Exception as e:
+        print(f"   ⚠️  Translation error: {e}")
+        return text
 
-        prompt = f"""Translate the following content into {TARGET_LANGUAGE}. 
+    prompt = f"""Translate the following content into {TARGET_LANGUAGE}. 
 Maintain the original Markdown formatting, structure, headers, and code blocks exactly.
 
 Content to translate:
 {text}
 
 Return ONLY the translated content without any extra explanation or preamble."""
+    for attempt in range(1, TRANSLATION_MAX_RETRIES + 1):
+        try:
+            response = client.models.generate_content(model=TRANSLATION_MODEL, contents=prompt)
+            translated_text = response.text
+            if translated_text:
+                return translated_text
 
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-        return response.text
+            # Some Gemini responses have no `response.text` even though the request
+            # itself succeeded, for example when candidates are empty or contain only
+            # non-text parts.
+            finish_reason = None
+            if getattr(response, "candidates", None):
+                finish_reason = getattr(response.candidates[0], "finish_reason", None)
+            print(f"   ⚠️  Translation returned no text (finish_reason={finish_reason!r})")
+            return text
 
-    except Exception as e:
-        print(f"   ⚠️  Translation error: {e}")
-        return text  # Return original text if translation fails
+        except Exception as e:
+            error_message = str(e)
+            is_retryable = any(
+                marker in error_message
+                for marker in ("429", "RESOURCE_EXHAUSTED", "Temporary failure in name resolution", "timed out")
+            )
+            if attempt < TRANSLATION_MAX_RETRIES and is_retryable:
+                delay_seconds = TRANSLATION_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+                print(
+                    f"   ⚠️  Translation attempt {attempt}/{TRANSLATION_MAX_RETRIES} failed: {e}. "
+                    f"Retrying in {delay_seconds:.1f}s..."
+                )
+                time.sleep(delay_seconds)
+                continue
+
+            print(f"   ⚠️  Translation error: {e}")
+            return text  # Return original text if translation fails
 
 
 def send_to_discord(content: str, webhook_url: Optional[str] = None) -> bool:
@@ -271,10 +304,13 @@ def main(vendor_args: Optional[list[str]] = None):
         print(f"\n🌐 Translating {project_name} release...")
         translated_release = latest_release.copy()
 
+        translation_applied = False
         if latest_release['description'] and api_key:
-            translated_release['description'] = translate_with_gemini(latest_release['description'], api_key)
+            translated_description = translate_with_gemini(latest_release['description'], api_key)
+            translated_release['description'] = translated_description
+            translation_applied = translated_description != latest_release['description']
 
-        message = format_release_message(project_name, translated_release, translated=bool(api_key))
+        message = format_release_message(project_name, translated_release, translated=translation_applied)
 
         # Send to Discord
         notification_sent = True
