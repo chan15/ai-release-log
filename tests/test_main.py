@@ -374,6 +374,87 @@ def test_fetch_codex_style(mocker):
     assert "This should be ignored" not in desc
 
 
+def test_fetch_antigravity_style(mocker):
+    """Test Antigravity style parsing with markdown-heading div containers."""
+    mock_html = """
+    <article class="markdown-body">
+        <div class="markdown-heading">
+            <h1 class="heading-element">Antigravity CLI Changelog</h1>
+        </div>
+        <p>Introduction text</p>
+        <div class="markdown-heading">
+            <h2 class="heading-element">1.0.8</h2>
+            <a class="anchor" href="#108">Link</a>
+        </div>
+        <ul>
+            <li>Added command history</li>
+            <li>Fixed a bug</li>
+        </ul>
+        <div class="markdown-heading">
+            <h2 class="heading-element">1.0.7</h2>
+        </div>
+    </article>
+    """
+    mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
+    scraper = ScraperFactory.get_scraper("antigravity")
+    release = scraper.fetch_latest_release()
+
+    assert release["version"] == "1.0.8"
+    assert release["url"] == "https://github.com/google-antigravity/antigravity-cli/blob/main/CHANGELOG.md#108"
+    assert "Added command history" in release["description"]
+    assert "Fixed a bug" in release["description"]
+    assert "1.0.7" not in release["description"]
+
+
+def test_fetch_antigravity_no_anchor(mocker):
+    """Test Antigravity parsing fallback when no anchor link exists in h2 container."""
+    mock_html = """
+    <article class="markdown-body">
+        <div class="markdown-heading">
+            <h2>1.0.8</h2>
+        </div>
+        <ul>
+            <li>No anchor here</li>
+        </ul>
+    </article>
+    """
+    mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
+    scraper = ScraperFactory.get_scraper("antigravity")
+    release = scraper.fetch_latest_release()
+
+    assert release["version"] == "1.0.8"
+    assert release["url"] == "https://github.com/google-antigravity/antigravity-cli/blob/main/CHANGELOG.md"
+
+
+def test_fetch_antigravity_missing_markdown_body(mocker):
+    """Test Antigravity parsing fallback when markdown-body tag is missing."""
+    mock_html = "<html><body>No content here</body></html>"
+    mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
+    scraper = ScraperFactory.get_scraper("antigravity")
+    release = scraper.fetch_latest_release()
+
+    assert release is None
+
+
+def test_fetch_antigravity_missing_h2(mocker):
+    """Test Antigravity parsing fallback when no h2 elements are found."""
+    mock_html = "<article class='markdown-body'><h1>Only title</h1></article>"
+    mocker.patch("requests.get", return_value=mocker.Mock(content=mock_html.encode(), raise_for_status=lambda: None))
+    scraper = ScraperFactory.get_scraper("antigravity")
+    release = scraper.fetch_latest_release()
+
+    assert release is None
+
+
+def test_fetch_antigravity_network_error(mocker):
+    """Test Antigravity parsing fallback on network error."""
+    mocker.patch("requests.get", side_effect=Exception("Network failure"))
+    scraper = ScraperFactory.get_scraper("antigravity")
+    release = scraper.fetch_latest_release()
+
+    assert release is None
+
+
 # ── resolve_target_project_keys ──────────────────────────────────────────────
 
 def test_resolve_target_project_keys_help_flag(mocker, capsys):
